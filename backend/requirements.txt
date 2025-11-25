@@ -1,3 +1,6 @@
 fastapi
 uvicorn
 pandas
+sqlalchemy
+asyncpg
+psycopg2-binary

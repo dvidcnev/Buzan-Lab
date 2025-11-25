@@ -1,6 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-import pandas as pd
+from sqlalchemy.ext.asyncio import AsyncSession
+from database import SessionLocal, engine, Base
+import models, crud, schemas
+from typing import List
 
 app = FastAPI()
 
@@ -13,18 +16,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Example in-memory data
-data = pd.DataFrame({
-    'id': [1, 2, 3],
-    'value': [10, 20, 30]
-})
+# Create tables (run once at startup)
+@app.on_event("startup")
+async def on_startup():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
-@app.get("/data")
-def get_data():
-    return data.to_dict(orient="records")
+# Dependency to get DB session
+async def get_db():
+    async with SessionLocal() as session:
+        yield session
 
-@app.post("/add")
-def add_data(item: dict):
-    global data
-    data = pd.concat([data, pd.DataFrame([item])], ignore_index=True)
-    return {"status": "success", "data": data.to_dict(orient="records")}
+@app.get("/data", response_model=List[schemas.SampleOut])
+async def get_data(db: AsyncSession = Depends(get_db)):
+    samples = await crud.get_samples(db)
+    return samples
+
+@app.post("/add", response_model=schemas.SampleOut)
+async def add_data(item: schemas.SampleCreate, db: AsyncSession = Depends(get_db)):
+    sample = await crud.add_sample(db, item)
+    return sample
