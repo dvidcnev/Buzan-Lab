@@ -19,3 +19,14 @@ class Storage(Base):
     extra_note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    action = Column(String(20), nullable=False)
+    tube_or_well_id = Column(String(100), nullable=True, index=True)
+    specimen_id = Column(String(100), nullable=True, index=True)
+    performed_by = Column(String(100), nullable=False, index=True)
+    details = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)

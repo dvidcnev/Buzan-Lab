@@ -47,3 +47,16 @@ class StorageOut(BaseModel):
     
     class Config:
         from_attributes = True
+
+
+class AuditLogOut(BaseModel):
+    id: int
+    action: str
+    tube_or_well_id: Optional[str]
+    specimen_id: Optional[str]
+    performed_by: str
+    details: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
