@@ -68,6 +68,7 @@ else:
         nav_options = ["View & Search"]
         if role in ["admin", "editor"]:
             nav_options.append("Add New Record")
+            nav_options.append("Dropdown Settings")
         if role == "admin":
             nav_options.append("Audit Log")
         action = st.radio("Select Action:", nav_options)
@@ -80,13 +81,13 @@ else:
         
         col1, col2, col3 = st.columns(3)
         with col1:
-            search_type = st.selectbox("Search by:", ["All Records", "Tube ID", "Specimen ID"])
+            search_type = st.selectbox("Search by:", ["All Records", "Specimen ID", "Tube ID"])
         
         search_term = None
-        if search_type == "Tube ID":
-            search_term = st.text_input("Enter Tube/Well ID (LME####):", placeholder="LME0001")
-        elif search_type == "Specimen ID":
-            search_term = st.text_input("Enter Specimen ID (LME####-##):", placeholder="LME0001-01")
+        if search_type == "Specimen ID":
+            search_term = st.text_input("Enter Specimen ID (LME####):", placeholder="LME0001")
+        elif search_type == "Tube ID":
+            search_term = st.text_input("Enter Tube ID (LME####-##):", placeholder="LME0001-01")
         
         with col2:
             skip = st.number_input("Skip", min_value=0, step=10, value=0)
@@ -110,9 +111,25 @@ else:
         # Search button
         if st.button("🔍 Search", key="search_btn"):
             try:
-                if search_type == "Tube ID" and search_term:
+                if search_type == "Specimen ID" and search_term:
                     if not re.match(r'^LME\d{4}$', search_term):
-                        st.error("Tube ID must be in format LME#### (e.g., LME0001)")
+                        st.error("Specimen ID must be in format LME#### (e.g., LME0001)")
+                    else:
+                        resp = requests.get(f"{BACKEND_URL}/storage/specimen/{search_term}", headers=headers)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            if data:
+                                df = pd.DataFrame(data)
+                                st.success(f"Found {len(data)} record(s)")
+                                st.dataframe(df, use_container_width=True)
+                            else:
+                                st.info(f"No records found with Specimen ID '{search_term}'")
+                        else:
+                            st.warning("Error retrieving records")
+                
+                elif search_type == "Tube ID" and search_term:
+                    if not re.match(r'^LME\d{4}-\d{2}$', search_term):
+                        st.error("Tube ID must be in format LME####-## (e.g., LME0001-01)")
                     else:
                         resp = requests.get(f"{BACKEND_URL}/storage/tube/{search_term}", headers=headers)
                         if resp.status_code == 200:
@@ -124,22 +141,6 @@ else:
                             st.warning(f"No record found with Tube ID '{search_term}'")
                         else:
                             st.error("Error retrieving record")
-                
-                elif search_type == "Specimen ID" and search_term:
-                    if not re.match(r'^LME\d{4}-\d{2}$', search_term):
-                        st.error("Specimen ID must be in format LME####-## (e.g., LME0001-01)")
-                    else:
-                        resp = requests.get(f"{BACKEND_URL}/storage/specimen/{search_term}", headers=headers)
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            if data:
-                                df = pd.DataFrame(data)
-                                st.success(f"Found {len(data)} records")
-                                st.dataframe(df, use_container_width=True)
-                            else:
-                                st.info(f"No records found with Specimen ID '{search_term}'")
-                        else:
-                            st.warning("Error retrieving records")
                 
                 elif search_type == "All Records":
                     params = {"skip": skip, "limit": limit}
@@ -165,16 +166,97 @@ else:
                             df = pd.DataFrame(data)
                             st.success(f"Loaded {len(data)} records")
                             
+                            # Add export buttons before displaying data
+                            export_col1, export_col2 = st.columns(2)
+                            with export_col1:
+                                if st.button("📥 Download All Records to Excel", key="export_all"):
+                                    try:
+                                        export_resp = requests.post(
+                                            f"{BACKEND_URL}/storage/export",
+                                            headers=headers,
+                                            json=None
+                                        )
+                                        if export_resp.status_code == 200:
+                                            st.download_button(
+                                                label="💾 Click to Download Excel File",
+                                                data=export_resp.content,
+                                                file_name=f"buzan_lab_all_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                            )
+                                        else:
+                                            st.error("Failed to export data")
+                                    except Exception as e:
+                                        st.error(f"Export error: {str(e)}")
+                            
+                            st.write("---")
+                            
                             # Filter columns to display
                             st.subheader("Filter Columns")
                             columns = st.multiselect(
                                 "Select columns to display:",
                                 options=df.columns.tolist(),
-                                default=["tube_or_well_id", "specimen_id", "storage_freezer_fridge", "storage_draw", "user_name_and_surname"]
+                                default=["id", "specimen_id", "tube_id", "storage_freezer_fridge", "storage_draw", "user_name_and_surname"]
                             )
                             
                             if columns:
-                                st.dataframe(df[columns], use_container_width=True)
+                                # Add checkbox column for selective export
+                                st.subheader("Select Records for Export")
+                                
+                                # Add select all checkbox
+                                select_all = st.checkbox("Select All Records", key="select_all")
+                                
+                                # Create selection state
+                                if "selected_records" not in st.session_state:
+                                    st.session_state.selected_records = []
+                                
+                                if select_all:
+                                    st.session_state.selected_records = [row["specimen_id"] for row in data]
+                                
+                                # Display data with checkboxes
+                                selected_ids = []
+                                for idx, row in enumerate(data):
+                                    checkbox_col, *data_cols = st.columns([1] + [3] * len(columns))
+                                    
+                                    with checkbox_col:
+                                        is_selected = st.checkbox(
+                                            "",
+                                            value=row["specimen_id"] in st.session_state.selected_records,
+                                            key=f"check_{row['specimen_id']}_{idx}"
+                                        )
+                                        if is_selected:
+                                            selected_ids.append(row["specimen_id"])
+                                    
+                                    for col_idx, col in enumerate(columns):
+                                        with data_cols[col_idx]:
+                                            if idx == 0:
+                                                st.write(f"**{col}**")
+                                            st.write(str(row.get(col, "")))
+                                    
+                                    if idx < len(data) - 1:
+                                        st.divider()
+                                
+                                # Export selected button
+                                if selected_ids:
+                                    st.write(f"**{len(selected_ids)} record(s) selected**")
+                                    if st.button(f"📥 Download Selected {len(selected_ids)} Record(s) to Excel", key="export_selected"):
+                                        try:
+                                            export_resp = requests.post(
+                                                f"{BACKEND_URL}/storage/export",
+                                                headers=headers,
+                                                json=selected_ids
+                                            )
+                                            if export_resp.status_code == 200:
+                                                st.download_button(
+                                                    label="💾 Click to Download Selected Records",
+                                                    data=export_resp.content,
+                                                    file_name=f"buzan_lab_selected_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                                    key="download_selected"
+                                                )
+                                            else:
+                                                st.error("Failed to export selected data")
+                                        except Exception as e:
+                                            st.error(f"Export error: {str(e)}")
                             else:
                                 st.warning("Please select at least one column")
                         else:
@@ -188,12 +270,12 @@ else:
         st.divider()
         st.subheader("Record Details & Actions")
         
-        detail_tube_id = st.text_input("Enter Tube ID to view/edit details:", placeholder="LME0001", key="detail_tube")
+        detail_tube_id = st.text_input("Enter Tube ID (LME####-##) to view/edit details:", placeholder="LME0001-01", key="detail_tube")
         
         if detail_tube_id and st.button("Load Details"):
             try:
-                if not re.match(r'^LME\d{4}$', detail_tube_id):
-                    st.error("Tube ID must be in format LME#### (e.g., LME0001)")
+                if not re.match(r'^LME\d{4}-\d{2}$', detail_tube_id):
+                    st.error("Tube ID must be in format LME####-## (e.g., LME0001-01)")
                 else:
                     resp = requests.get(f"{BACKEND_URL}/storage/tube/{detail_tube_id}", headers=headers)
                     if resp.status_code == 200:
@@ -202,12 +284,93 @@ else:
                         
                         # Show delete button only for admin
                         if st.session_state.user["role"] == "admin":
-                            if st.button(f"🗑️ Delete Record {detail_tube_id}", key=f"delete_{detail_tube_id}"):
-                                del_resp = requests.delete(f"{BACKEND_URL}/storage/{detail_tube_id}", headers=headers)
-                                if del_resp.status_code == 200:
-                                    st.success("Record deleted successfully!")
+                            st.write("---")
+                            st.subheader("🗑️ Delete Record")
+                            delete_password = st.text_input("Enter your password to confirm deletion:", type="password", key=f"del_pass_{detail_tube_id}")
+                            if st.button(f"Delete Record {detail_tube_id}", key=f"delete_{detail_tube_id}"):
+                                if not delete_password:
+                                    st.error("Password is required for deletion")
                                 else:
-                                    st.error("Failed to delete record")
+                                    del_resp = requests.delete(
+                                        f"{BACKEND_URL}/storage/{detail_tube_id}", 
+                                        headers=headers,
+                                        json={"password": delete_password}
+                                    )
+                                    if del_resp.status_code == 200:
+                                        st.success("✅ Record deleted successfully!")
+                                    elif del_resp.status_code == 401:
+                                        st.error("❌ Invalid password")
+                                    else:
+                                        st.error("Failed to delete record")
+                        
+                        # Show edit form for admin and editor
+                        if st.session_state.user["role"] in ["admin", "editor"]:
+                            st.write("---")
+                            st.subheader("✏️ Edit Record")
+                            with st.form(key=f"edit_form_{detail_tube_id}"):
+                                edit_col1, edit_col2 = st.columns(2)
+                                with edit_col1:
+                                    edit_specimen_id = st.text_input("Specimen ID (LME Number - LME####)", value=record.get("specimen_id", ""))
+                                    edit_tube_id = st.text_input("Tube ID (LME + Tissue Number - LME####-##)", value=record.get("tube_id", ""))
+                                    edit_tissue_type = st.text_input("Tissue Type", value=record.get("tissue_type", "") or "")
+                                    edit_tissue_subtype = st.text_input("Tissue Subtype", value=record.get("tissue_subtype", "") or "")
+                                    edit_storage_batch = st.text_input("Storage ID - Extraction Batch", value=record.get("storage_id_extraction_batch", "") or "")
+                                    edit_freezer_fridge = st.text_input("Freezer/Fridge Location", value=record.get("storage_freezer_fridge", "") or "")
+                                    edit_storage_draw = st.text_input("Storage Drawer", value=record.get("storage_draw", "") or "")
+                                
+                                with edit_col2:
+                                    edit_extraction_link = st.text_input("Extraction Data Link", value=record.get("extraction_data_link", "") or "")
+                                    edit_pcr_link = st.text_input("PCR and Gel Data Link", value=record.get("pcr_and_gel_data_link", "") or "")
+                                    edit_post_pcr_link = st.text_input("Post-PCR Data Link", value=record.get("post_pcr_data_link", "") or "")
+                                    edit_user_name = st.text_input("User Name and Surname", value=record.get("user_name_and_surname", "") or "")
+                                
+                                edit_notes = st.text_area("Notes about Sample", value=record.get("notes_about_sample", "") or "", height=100)
+                                edit_extra_note = st.text_area("Extra Notes", value=record.get("extra_note", "") or "", height=100)
+                                edit_password = st.text_input("Enter your password to confirm changes:", type="password")
+                                
+                                edit_submit = st.form_submit_button("💾 Save Changes")
+                                
+                                if edit_submit:
+                                    if not edit_password:
+                                        st.error("Password is required for editing")
+                                    elif not edit_specimen_id.strip():
+                                        st.error("Specimen ID is required")
+                                    elif not re.match(r'^LME\d{4}$', edit_specimen_id):
+                                        st.error("Specimen ID must be in format LME#### (e.g., LME0001)")
+                                    elif not edit_tube_id.strip():
+                                        st.error("Tube ID is required")
+                                    elif not re.match(r'^LME\d{4}-\d{2}$', edit_tube_id):
+                                        st.error("Tube ID must be in format LME####-## (e.g., LME0001-01)")
+                                    else:
+                                        edit_payload = {
+                                            "specimen_id": edit_specimen_id,
+                                            "tube_id": edit_tube_id,
+                                            "tissue_type": edit_tissue_type if edit_tissue_type.strip() else None,
+                                            "tissue_subtype": edit_tissue_subtype if edit_tissue_subtype.strip() else None,
+                                            "storage_id_extraction_batch": edit_storage_batch if edit_storage_batch.strip() else None,
+                                            "storage_freezer_fridge": edit_freezer_fridge if edit_freezer_fridge.strip() else None,
+                                            "storage_draw": edit_storage_draw if edit_storage_draw.strip() else None,
+                                            "extraction_data_link": edit_extraction_link if edit_extraction_link.strip() else None,
+                                            "pcr_and_gel_data_link": edit_pcr_link if edit_pcr_link.strip() else None,
+                                            "post_pcr_data_link": edit_post_pcr_link if edit_post_pcr_link.strip() else None,
+                                            "user_name_and_surname": edit_user_name if edit_user_name.strip() else None,
+                                            "notes_about_sample": edit_notes if edit_notes.strip() else None,
+                                            "extra_note": edit_extra_note if edit_extra_note.strip() else None,
+                                            "password": edit_password
+                                        }
+                                        edit_resp = requests.put(
+                                            f"{BACKEND_URL}/storage/{detail_tube_id}",
+                                            json=edit_payload,
+                                            headers=headers
+                                        )
+                                        if edit_resp.status_code == 200:
+                                            st.success("✅ Record updated successfully!")
+                                            st.json(edit_resp.json())
+                                        elif edit_resp.status_code == 401:
+                                            st.error("❌ Invalid password")
+                                        else:
+                                            error_detail = edit_resp.json().get("detail", "Unknown error")
+                                            st.error(f"❌ Failed to update record: {error_detail}")
                     else:
                         st.warning("Record not found")
             except Exception as e:
@@ -221,10 +384,50 @@ else:
         else:
             st.subheader("Add New Storage Record")
             
+            # Fetch next available IDs
+            try:
+                lme_resp = requests.get(f"{BACKEND_URL}/storage/next-lme", headers=headers)
+                if lme_resp.status_code == 200:
+                    next_lme = lme_resp.json().get("next_lme", "LME0001")
+                else:
+                    next_lme = "LME0001"
+            except:
+                next_lme = "LME0001"
+            
+            st.info(f"ℹ️ **Next Available Specimen ID (LME Number):** `{next_lme}` - This will be auto-generated")
+            st.info(f"ℹ️ **Tube ID will be auto-generated** based on the Specimen ID (e.g., {next_lme}-01)")
+            
+            # Fetch tissue type options
+            try:
+                tissue_resp = requests.get(f"{BACKEND_URL}/dropdowns?category=tissue_type", headers=headers)
+                if tissue_resp.status_code == 200:
+                    tissue_options = [t["value"] for t in tissue_resp.json()]
+                else:
+                    tissue_options = []
+            except:
+                tissue_options = []
+            
             col1, col2 = st.columns(2)
             with col1:
-                tube_id = st.text_input("Tube/Well ID (LME####)", placeholder="LME0001")
-                specimen_id = st.text_input("Specimen ID (LME####-##)", placeholder="LME0001-01")
+                use_auto_ids = st.checkbox("Use Auto-Generated IDs (Recommended)", value=True)
+                # Tissue type selection
+                if tissue_options:
+                    tissue_type = st.selectbox("Tissue Type", options=[""] + tissue_options)
+                else:
+                    tissue_type = st.text_input("Tissue Type", placeholder="Optional - e.g., Blood, Tissue, Plasma")
+                
+                tissue_subtype = st.text_input("Tissue Subtype/Classification", placeholder="Optional - Additional tissue details")
+                
+                
+                if use_auto_ids:
+                    specimen_id_val = ""  # Will be auto-generated
+                    tube_id_val = ""  # Will be auto-generated
+                    st.text_input("Specimen ID (Auto-Generated)", value=next_lme, disabled=True)
+                    st.text_input("Tube ID (Auto-Generated)", value=f"{next_lme}-01", disabled=True)
+                else:
+                    specimen_id_val = st.text_input("Specimen ID (LME Number - LME####)", placeholder="LME0001")
+                    tube_id_val = st.text_input("Tube ID (LME + Tissue Number - LME####-##)", placeholder="LME0001-01")
+                
                 storage_batch = st.text_input("Storage ID - Extraction Batch", placeholder="Optional")
                 freezer_fridge = st.text_input("Freezer/Fridge Location", placeholder="Optional")
                 storage_draw = st.text_input("Storage Drawer", placeholder="Optional")
@@ -240,36 +443,46 @@ else:
             
             if st.button("➕ Add Record", key="add_record"):
                 try:
-                    # Validate required fields
-                    if not tube_id.strip():
-                        st.error("Tube/Well ID is required")
-                    elif not re.match(r'^LME\d{4}$', tube_id):
-                        st.error("Tube/Well ID must be in format LME#### (e.g., LME0001)")
-                    elif not specimen_id.strip():
-                        st.error("Specimen ID is required")
-                    elif not re.match(r'^LME\d{4}-\d{2}$', specimen_id):
-                        st.error("Specimen ID must be in format LME####-## (e.g., LME0001-01)")
+                    # Validate only if not using auto-generated IDs
+                    if not use_auto_ids:
+                        if not specimen_id_val.strip():
+                            st.error("Specimen ID is required")
+                            st.stop()
+                        elif not re.match(r'^LME\d{4}$', specimen_id_val):
+                            st.error("Specimen ID must be in format LME#### (e.g., LME0001)")
+                            st.stop()
+                        elif not tube_id_val.strip():
+                            st.error("Tube ID is required")
+                            st.stop()
+                        elif not re.match(r'^LME\d{4}-\d{2}$', tube_id_val):
+                            st.error("Tube ID must be in format LME####-## (e.g., LME0001-01)")
+                            st.stop()
+                    
+                    payload = {
+                        "specimen_id": specimen_id_val if not use_auto_ids and specimen_id_val.strip() else None,
+                        "tube_id": tube_id_val if not use_auto_ids and tube_id_val.strip() else None,
+                        "tissue_type": tissue_type if tissue_type and tissue_type.strip() else None,
+                        "tissue_subtype": tissue_subtype if tissue_subtype.strip() else None,
+                        "storage_id_extraction_batch": storage_batch if storage_batch.strip() else None,
+                        "storage_freezer_fridge": freezer_fridge if freezer_fridge.strip() else None,
+                        "storage_draw": storage_draw if storage_draw.strip() else None,
+                        "extraction_data_link": extraction_link if extraction_link.strip() else None,
+                        "pcr_and_gel_data_link": pcr_link if pcr_link.strip() else None,
+                        "post_pcr_data_link": post_pcr_link if post_pcr_link.strip() else None,
+                        "user_name_and_surname": user_name if user_name.strip() else None,
+                        "notes_about_sample": notes if notes.strip() else None,
+                        "extra_note": extra_note if extra_note.strip() else None
+                    }
+                    resp = requests.post(f"{BACKEND_URL}/storage", json=payload, headers=headers)
+                    if resp.status_code == 200:
+                        result = resp.json()
+                        st.success(f"✅ Storage record added successfully!")
+                        st.success(f"📋 Specimen ID: **{result['specimen_id']}**")
+                        st.success(f"🧪 Tube ID: **{result['tube_id']}**")
+                        st.json(result)
                     else:
-                        payload = {
-                            "tube_or_well_id": tube_id,
-                            "specimen_id": specimen_id,
-                            "storage_id_extraction_batch": storage_batch if storage_batch.strip() else None,
-                            "storage_freezer_fridge": freezer_fridge if freezer_fridge.strip() else None,
-                            "storage_draw": storage_draw if storage_draw.strip() else None,
-                            "extraction_data_link": extraction_link if extraction_link.strip() else None,
-                            "pcr_and_gel_data_link": pcr_link if pcr_link.strip() else None,
-                            "post_pcr_data_link": post_pcr_link if post_pcr_link.strip() else None,
-                            "user_name_and_surname": user_name if user_name.strip() else None,
-                            "notes_about_sample": notes if notes.strip() else None,
-                            "extra_note": extra_note if extra_note.strip() else None
-                        }
-                        resp = requests.post(f"{BACKEND_URL}/storage", json=payload, headers=headers)
-                        if resp.status_code == 200:
-                            st.success(f"✅ Storage record {tube_id} added successfully!")
-                            st.json(resp.json())
-                        else:
-                            error_detail = resp.json().get("detail", "Unknown error")
-                            st.error(f"❌ Failed to add record: {error_detail}")
+                        error_detail = resp.json().get("detail", "Unknown error")
+                        st.error(f"❌ Failed to add record: {error_detail}")
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
 
@@ -278,7 +491,7 @@ else:
         col1, col2, col3 = st.columns(3)
         with col1:
             action_filter = st.selectbox("Action", ["All", "CREATE", "UPDATE", "DELETE"])
-            tube_filter = st.text_input("Tube ID contains", key="audit_tube")
+            specimen_filter = st.text_input("Specimen ID contains", key="audit_specimen")
         with col2:
             user_filter = st.text_input("Performed by contains", key="audit_user")
             limit = st.number_input("Limit", min_value=1, max_value=500, value=100, step=10, key="audit_limit")
@@ -291,8 +504,8 @@ else:
             params = {"skip": 0, "limit": limit}
             if action_filter != "All":
                 params["action"] = action_filter
-            if tube_filter:
-                params["tube_or_well_id"] = tube_filter
+            if specimen_filter:
+                params["specimen_id"] = specimen_filter
             if user_filter:
                 params["performed_by"] = user_filter
             if audit_use_date_filter and audit_date_from:
